@@ -1,0 +1,11 @@
+Microsoft C runtime — Windows builds only
+
+PyInstaller copies vcruntime140.dll (and vcruntime140_1.dll, when present)
+from the Python installation that froze the add-on: CPython itself is linked
+against them. The Whistle engine (libneedle3.dll) needs only the Universal C
+Runtime, which is part of Windows 10 and later and is not bundled.
+
+These files are Microsoft "Distributable Code" under the Microsoft Visual
+Studio licence terms, which permit redistributing them unmodified as part of
+an application. See:
+https://learn.microsoft.com/visualstudio/releases/2022/redistribution

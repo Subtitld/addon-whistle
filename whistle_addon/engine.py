@@ -19,8 +19,7 @@ from __future__ import annotations
 import ctypes
 import json
 import threading
-
-import numpy as np
+from array import array
 
 SAMPLE_RATE = 16000
 LANGUAGES = ('en', 'de', 'fr', 'es', 'it', 'nl', 'pl')
@@ -60,26 +59,30 @@ class Engine:
         message = self._lib.needle_last_error()
         return message.decode('utf-8', 'replace') if message else 'unknown engine error'
 
-    def transcribe(self, samples: np.ndarray, language: str | None = None,
+    def transcribe(self, samples: array, language: str | None = None,
                    keywords: list[str] | None = None) -> dict:
-        """Transcribe 16 kHz mono float32 samples in [-1, 1], of any length.
+        """Transcribe 16 kHz mono float samples in [-1, 1], of any length.
 
-        Returns the engine's dict: "text", "language", "ttft_ms", "decode_tps"
-        and "words". Each word has "word", "start", "end" and "probability",
-        in seconds from the start of the audio. `language` is one of LANGUAGES,
-        or None to detect it. `keywords` are names or phrases to favour.
+        `samples` is an array('f'). Returns the engine's dict: "text", "language",
+        "ttft_ms", "decode_tps" and "words". Each word has "word", "start", "end"
+        and "probability", in seconds from the start of the audio. `language` is
+        one of LANGUAGES, or None to detect it. `keywords` are names or phrases
+        to favour.
         """
-        samples = np.ascontiguousarray(samples, dtype=np.float32)
-        if samples.size == 0:
+        if samples.typecode != 'f':
+            raise TypeError("samples must be array('f')")
+        count = len(samples)
+        if count == 0:
             raise ValueError('there are no samples to transcribe')
         language_arg = language.encode('utf-8') if language else None
         keywords_arg = '\n'.join(keywords).encode('utf-8') if keywords else None
-        needed = samples.size // SAMPLE_RATE * _OUTPUT_BYTES_PER_SECOND
-        pointer = samples.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        needed = count // SAMPLE_RATE * _OUTPUT_BYTES_PER_SECOND
+        # The array's own buffer, not a copy: it stays alive for the call.
+        pointer = (ctypes.c_float * count).from_buffer(samples)
         with self._lock:
             if needed > len(self._buffer):
                 self._buffer = ctypes.create_string_buffer(needed)
-            code = self._lib.needle_transcribe(pointer, samples.size, language_arg, keywords_arg, 1,
+            code = self._lib.needle_transcribe(pointer, count, language_arg, keywords_arg, 1,
                                                self._buffer, len(self._buffer))
             if code < 0:
                 raise EngineError(self._last_error())

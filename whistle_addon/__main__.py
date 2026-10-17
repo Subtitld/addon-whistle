@@ -36,18 +36,17 @@ from __future__ import annotations
 
 import json
 import logging
-import multiprocessing
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+from array import array
 from pathlib import Path
-
-import numpy as np
 
 from whistle_addon import ADDON_ID, PROTOCOL_VERSION, __version__
 from whistle_addon.engine import LANGUAGES, SAMPLE_RATE, Engine, EngineError
@@ -58,6 +57,7 @@ MODEL_ID = 'whistle'
 WEIGHTS_FILE = 'whistle.cact'
 # Below this there is nothing to transcribe, and the engine would refuse it.
 _MIN_SAMPLES = SAMPLE_RATE // 10
+_READ_CHUNK_BYTES = 1 << 20
 
 ERR_MODEL_MISSING = 'model_missing'
 ERR_UNSUPPORTED_LANGUAGE = 'unsupported_language'
@@ -252,38 +252,51 @@ def _child_env() -> dict | None:
     return env
 
 
-def _decode(ffmpeg: str, src: str, cancel: threading.Event) -> np.ndarray:
-    """Decode anything ffmpeg reads into 16 kHz mono float32 samples in [-1, 1].
+def _decode(ffmpeg: str, src: str, cancel: threading.Event) -> array:
+    """Decode anything ffmpeg reads into 16 kHz mono float samples in [-1, 1].
 
-    The raw PCM comes back on a pipe, so no temporary file is written.
-    `-nostdin` plus stdin=DEVNULL: ffmpeg polls stdin for keystrokes.
+    ffmpeg writes float32 straight into a pipe, so no temporary audio file is
+    made and no PCM copy is kept: the samples are read in chunks into one
+    array('f'). stderr goes to a temporary file, so a chatty ffmpeg cannot
+    fill a pipe and stall. `-nostdin` plus stdin=DEVNULL: ffmpeg polls stdin
+    for keystrokes.
     """
     cmd = [ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error',
            '-i', src, '-vn', '-sn', '-dn',
-           '-ac', '1', '-ar', str(SAMPLE_RATE), '-c:a', 'pcm_s16le', '-f', 's16le', 'pipe:1']
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, env=_child_env(),
-                            startupinfo=_no_window_startupinfo())
-    while True:
+           '-ac', '1', '-ar', str(SAMPLE_RATE), '-c:a', 'pcm_f32le', '-f', 'f32le', 'pipe:1']
+    samples = array('f')
+    with tempfile.TemporaryFile() as errors:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=errors, env=_child_env(),
+                                startupinfo=_no_window_startupinfo())
+        pending = b''
         try:
-            raw, err = proc.communicate(timeout=0.25)
-            break
-        except subprocess.TimeoutExpired:
-            if cancel.is_set():
-                proc.kill()
-                proc.communicate()
-                raise _Cancelled() from None
-    if proc.returncode != 0 or not raw:
-        tail = ' / '.join((err or b'').decode('utf-8', 'replace').strip().splitlines()[-5:])
-        if 'No space left' in tail:
-            raise _AddonError(ERR_DISK_FULL, f'Out of disk space while decoding the audio: {tail}')
-        raise _AddonError(ERR_INTERNAL,
-                          f'Could not decode the audio with ffmpeg '
-                          f'(exit {proc.returncode}): {tail or "no output"}')
-    # One float copy, scaled in place: an hour of audio is already ~115 MB of PCM.
-    samples = np.frombuffer(raw, dtype='<i2', count=len(raw) // 2).astype(np.float32)
-    del raw
-    samples /= 32768.0
+            while True:
+                if cancel.is_set():
+                    raise _Cancelled()
+                chunk = proc.stdout.read(_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                data = pending + chunk
+                usable = len(data) // 4 * 4
+                samples.frombytes(memoryview(data)[:usable])
+                pending = data[usable:]
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        proc.stdout.close()
+        returncode = proc.wait()
+        if returncode != 0 or not len(samples):
+            errors.seek(0)
+            tail = ' / '.join(errors.read().decode('utf-8', 'replace').strip().splitlines()[-5:])
+            if 'No space left' in tail:
+                raise _AddonError(ERR_DISK_FULL, f'Out of disk space while decoding the audio: {tail}')
+            raise _AddonError(ERR_INTERNAL,
+                              f'Could not decode the audio with ffmpeg '
+                              f'(exit {returncode}): {tail or "no output"}')
+    if sys.byteorder != 'little':
+        samples.byteswap()  # ffmpeg wrote little-endian floats
     return samples
 
 
@@ -328,7 +341,6 @@ class _Request:
 
 _active: dict[str, _Request] = {}
 _active_lock = threading.Lock()
-_shutting_down = threading.Event()
 
 
 def _handle_transcribe(state: _Request, params: dict) -> None:
@@ -364,12 +376,12 @@ def _handle_transcribe(state: _Request, params: dict) -> None:
         # 1. Decode: 0.00 -> 0.05
         _emit_progress(req_id, 0.0, 'Decoding audio...')
         samples = _decode(ffmpeg, audio_path, state.cancel)
-        duration = samples.size / float(SAMPLE_RATE)
+        duration = len(samples) / float(SAMPLE_RATE)
         if state.cancel.is_set():
             raise _Cancelled()
         _emit_progress(req_id, 0.05, 'Decoded audio')
 
-        if samples.size < _MIN_SAMPLES:
+        if len(samples) < _MIN_SAMPLES:
             log.info('transcribe %s: %.3fs of audio, nothing to transcribe', req_id, duration)
             segments: list[dict] = []
             detected = language or ''
@@ -524,7 +536,6 @@ def _stop_workers(budget_sec: float = 3.5) -> bool:
 
     The host allows 5 s between `shutdown` and SIGTERM, so stay under it.
     """
-    _shutting_down.set()
     with _active_lock:
         states = list(_active.values())
     for state in states:
@@ -537,9 +548,6 @@ def _stop_workers(budget_sec: float = 3.5) -> bool:
 
 
 def main() -> int:
-    # No-op unless frozen. Keeps the executable from starting a second protocol
-    # loop if anything in the frozen graph re-launches it.
-    multiprocessing.freeze_support()
     _claim_protocol_stdio()
     logging.basicConfig(
         level=(_env('WHISTLE_ADDON_LOG_LEVEL') or 'INFO').upper(),

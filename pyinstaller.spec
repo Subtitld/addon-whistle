@@ -47,12 +47,12 @@ datas = [(str(ASSETS / 'whistle.cact'), 'assets')]
 
 
 # ---------------------------------------------------------------------------
-# libexpat sanity check (verbatim from addon-whispercpp).
+# libexpat sanity check (from addon-whispercpp).
 #
-# With numpy in the graph, PyInstaller bundles whatever expat it resolved on
-# the build host. If that host has an OLD expat shadowing the distro one (for
-# example a hand-built 2.5.0 in /usr/local/lib), the frozen binary dies before
-# reaching Python:
+# PyInstaller bundles whatever expat it resolved on the build host, for
+# CPython's pyexpat. If that host has an OLD expat shadowing the distro one
+# (for example a hand-built 2.5.0 in /usr/local/lib), the frozen binary dies
+# before reaching Python:
 #     Failed to load libpython3.x.so: undefined symbol: XML_SetReparseDeferralEnabled
 # Dropping the bundled copy is not a fix either, because the same stale system
 # copy is then used. So verify the bundled copy exports the symbol libpython
@@ -114,11 +114,18 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         'PySide6', 'PyQt6', 'PyQt5', 'tkinter', 'Tkinter', '_tkinter',
-        'matplotlib', 'scipy', 'pandas', 'IPython', 'ipywidgets',
-        'numpy.f2py', 'numpy.distutils', 'numpy.testing',
-        'setuptools', 'pkg_resources', 'unittest', 'pydoc_data', 'pytest',
+        'numpy', 'setuptools', 'pkg_resources', 'unittest', 'pydoc_data', 'pytest',
         # Nothing in the add-on uses the network. Keep these out of the bundle.
         'huggingface_hub', 'requests', 'urllib3', 'certifi',
+        # Standard modules the add-on never calls, reached only through
+        # optional imports (shutil's archive formats, random's hash fallback).
+        # Each one would bring a native library, and with it a licence to
+        # ship: OpenSSL, bzip2, xz, zstd, libmpdec. tests/test_installed.py
+        # runs the frozen binary end to end, so a module that turns out to be
+        # needed fails the release build, not the user.
+        'ssl', '_ssl', 'hashlib', '_hashlib',
+        'bz2', '_bz2', 'lzma', '_lzma', 'compression', '_zstd',
+        'decimal', '_decimal', '_pydecimal',
     ],
     noarchive=False,
 )

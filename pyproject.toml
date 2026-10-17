@@ -11,13 +11,12 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Subtitld", email = "jbopen@gmail.com" }]
 requires-python = ">=3.10"
 
-# The add-on calls Whistle's native engine itself (whistle_addon/engine.py), so
-# the cactus-needle package is not a dependency: its engine and weights are
-# pinned and verified by tools/fetch_assets.py instead. The engine version is
-# the one cactus-needle 3.2.4 names as its engine (ENGINE_VERSIONS[3] = 3.3.1).
-dependencies = [
-    "numpy>=1.24",
-]
+# No runtime dependencies. The add-on calls Whistle's native engine itself
+# (whistle_addon/engine.py), so the cactus-needle package is not a dependency:
+# its engine and weights are pinned and verified by tools/fetch_assets.py. The
+# engine version is the one cactus-needle 3.2.4 names as its engine
+# (ENGINE_VERSIONS[3] = 3.3.1). Audio is decoded by ffmpeg, which the host passes.
+dependencies = []
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.10"]

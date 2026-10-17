@@ -9,7 +9,8 @@ engine.
 - **Offline and self-contained.** The 16.9 MB model and its engine are inside
   the add-on. Transcription downloads nothing and sends nothing anywhere: no
   telemetry, no account.
-- **CPU only.** No GPU, no torch.
+- **CPU only.** No GPU, no torch, and no Python packages beyond the standard
+  library.
 - Word timings from the model become subtitle rows: one row per sentence where
   the speech allows it, otherwise split by length, as the whisper.cpp add-on does.
 - Seven languages. For any other language, use the Whisper (offline) add-on.
@@ -49,6 +50,12 @@ The add-on calls the engine itself. It does not install or import the
 `cactus-needle` Python package, which would bring a telemetry client and a
 downloader that can fetch native code at runtime.
 
+Each release archive also carries CPython and the few native libraries its
+standard modules need (libffi, Expat, zlib), frozen by PyInstaller. Its
+`THIRD_PARTY_LICENSES/` folder is assembled at build time by
+`tools/assemble_licences.py`, with a README that names the notice for every
+native file in the archive. The build fails if any native file has none.
+
 ## Limits
 
 - **Batch only.** One result per request. The live `asr.stream` task is not
@@ -58,11 +65,12 @@ downloader that can fetch native code at runtime.
 - **Punctuation varies.** Whistle does not always put commas and full stops in
   its output. Where it does not, rows split on the length caps (84 characters
   or 7 seconds) rather than at sentence ends.
-- **Memory grows with the file.** Decoding holds the whole track: for an hour
-  of audio, about 115 MB of PCM plus 230 MB of float samples at the peak. The
-  engine's own working memory on long files has not been measured.
-- **Platforms.** The Linux build was run here. The macOS and Windows engines
-  are pinned but not yet run; the CI release has to prove them.
+- **Memory grows with the file.** The whole track is held as float samples:
+  about 230 MB for an hour of audio. The engine's own working memory on long
+  files has not been measured.
+- **Platforms.** Releases ship Linux x86_64, macOS arm64 and Windows x86_64.
+  The macOS archive is arm64 only, as the other add-ons' are. The Windows
+  engine needs only the Universal C Runtime, which Windows 10 and later include.
 
 ## Measured here
 
@@ -70,11 +78,12 @@ Linux x86_64, CPU, the frozen build:
 
 | Input | Time to transcribe | Peak memory |
 |-------|--------------------|-------------|
-| 11 s clip | 0.71 s | 71 MB |
-| 66 s clip (windowed by the engine) | 5.9 s | 94 MB |
+| 11 s clip | 0.68 s | 57 MB |
+| 66 s clip (windowed by the engine) | 5.0 to 5.8 s | 80 MB |
 
 Word timings stayed monotonic across the 66 s run, with no gap longer than
-1.1 s between words.
+1.1 s between words. The Linux release archive is 20.5 MiB, or 28.6 MiB
+installed.
 
 ## Building
 
@@ -82,11 +91,21 @@ Word timings stayed monotonic across the 66 s run, with no gap longer than
 pip install -e .[build,dev]
 python tools/fetch_assets.py                 # engine and weights, verified
 pyinstaller pyinstaller.spec --noconfirm     # dist/whistle-addon/
+python tools/assemble_licences.py --bundle dist/whistle-addon --out release-staging/THIRD_PARTY_LICENSES
 ```
 
 `tools/fetch_assets.py` takes `--platform` (`linux-x86_64`, `macos-arm64`,
 `macos-x86_64`, `windows-x86_64`) when the build is not for this machine. The
 archive is made the way the other add-ons are, with `tools/make_archive.py`.
+
+## Releasing
+
+Push a tag `v<version>` that matches `manifest.json`. The release workflow
+runs the tests, then builds each platform and installs its zip the way Subtitld
+does. The installed binary has to transcribe the sample before anything is
+published. It then publishes the zips with their `.sha256` files and asks the
+add-ons catalog to rebuild. Without the `SUBTITLD_BOT_TOKEN` secret, the
+catalog picks the release up on its six-hourly rebuild instead.
 
 ## Tests
 
@@ -96,6 +115,9 @@ pytest
 
 The engine tests need the assets from `tools/fetch_assets.py`, and skip without
 them. The protocol tests need ffmpeg for the decode path, and skip without it.
+`tests/test_installed.py` runs the add-on as a process over its protocol: from
+source by default, or the executable named by `WHISTLE_TEST_BINARY`, which is
+how the release workflow tests each installed archive.
 `tests/data/jfk.flac` is a copy of the JFK clip the Whisper (offline) add-on's
 tests use.
 

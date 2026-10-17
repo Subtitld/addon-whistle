@@ -1,0 +1,325 @@
+name: Release
+
+# Copyright 2026 Subtitld contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# test -> build (one per platform, needs: test) -> release (tags only).
+#
+# A handshake proves little here: the engine library is only loaded at the
+# first transcription, so a bundle missing it starts, says hello, and fails on
+# the user's first click. Every platform's FROZEN binary is therefore unpacked
+# from its release zip the way Subtitld installs it, and transcribes the sample
+# through the protocol with nothing but the engine and weights inside its own
+# bundle, before anything is published.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The decode and transcription tests shell out to ffmpeg. Without it they
+      # skip themselves, and the skip check below fails the run.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      # Both files are checked against their pinned sha256 before use.
+      - name: Fetch engine and weights
+        run: python tools/fetch_assets.py --platform linux-x86_64
+
+      - name: Test suite (includes real transcription)
+        run: pytest -q -rs --junitxml=report.xml
+
+      - name: Refuse skipped tests
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse('report.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root)
+          skipped = sum(int(s.get('skipped', 0)) for s in suites)
+          tests = sum(int(s.get('tests', 0)) for s in suites)
+          print(f'{tests} tests, {skipped} skipped')
+          if skipped:
+              sys.exit('FATAL: tests were skipped; the release would ship partly untested')
+          PY
+
+  build:
+    name: Build ${{ matrix.platform_label }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform_label: linux-x86_64
+            exe_suffix: ''
+          # The catalog cannot tell Mac architectures apart: ship arm64, as the
+          # other add-ons do.
+          - os: macos-14
+            platform_label: macos-arm64
+            exe_suffix: ''
+          - os: windows-2022
+            platform_label: windows-x86_64
+            exe_suffix: '.exe'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ffmpeg is for the tests only; it is not bundled. The host passes its
+      # own via SUBTITLD_FFMPEG_EXECUTABLE.
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install ffmpeg
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install build deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e '.[build,dev]'
+          python -c "from importlib.metadata import version as v; import platform, shutil; print('python', platform.python_version(), '| pyinstaller', v('pyinstaller'), '| ffmpeg', shutil.which('ffmpeg'))"
+
+      # Both files are checked against their pinned sha256 before use.
+      - name: Fetch engine and weights
+        shell: bash
+        run: python tools/fetch_assets.py --platform ${{ matrix.platform_label }}
+
+      - name: Build bundle
+        shell: bash
+        run: pyinstaller pyinstaller.spec --noconfirm
+
+      # Fails the build when a native file in the bundle has no notice.
+      - name: Assemble third-party licences
+        shell: bash
+        run: python tools/assemble_licences.py --bundle dist/whistle-addon --out release-staging/THIRD_PARTY_LICENSES
+
+      - name: Stage archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(python -c "import json; print(json.load(open('manifest.json'))['version'])")
+          mkdir -p release-staging/bin
+          cp -R dist/whistle-addon/. release-staging/bin/
+          cp LICENSE README.md release-staging/
+          # The host resolves `executable` verbatim (manifest dir / path) and
+          # never appends `.exe`, so the Windows archive names the real file.
+          python - "${{ matrix.exe_suffix }}" <<'PY'
+          import json, sys
+          suffix = sys.argv[1]
+          manifest = json.load(open('manifest.json', encoding='utf-8'))
+          manifest['executable'] += suffix
+          with open('release-staging/manifest.json', 'w', encoding='utf-8') as f:
+              json.dump(manifest, f, indent=2, ensure_ascii=False)
+              f.write('\n')
+          print('executable:', manifest['executable'])
+          PY
+          test -f "release-staging/bin/whistle-addon${{ matrix.exe_suffix }}"
+          archive="whistle-${version}-${{ matrix.platform_label }}.zip"
+          python tools/make_archive.py release-staging "$archive"
+          echo "ARCHIVE_NAME=$archive" >> "$GITHUB_ENV"
+
+      - name: Report sizes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          def tree_size(path):
+              total = 0
+              for d, _, files in os.walk(path):
+                  for f in files:
+                      p = os.path.join(d, f)
+                      if not os.path.islink(p):
+                          total += os.path.getsize(p)
+              return total
+          onedir = tree_size('dist/whistle-addon')
+          archive = os.path.getsize(os.environ['ARCHIVE_NAME'])
+          line = (f"{os.environ['ARCHIVE_NAME']}: onedir {onedir:,} bytes "
+                  f"({onedir / 2**20:.1f} MiB), archive {archive:,} bytes ({archive / 2**20:.1f} MiB)")
+          print(line)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
+              f.write(line + '\n')
+          PY
+
+      - name: Show engine linkage (macOS)
+        if: runner.os == 'macOS'
+        run: otool -L release-staging/bin/_internal/assets/libneedle3.dylib || true
+
+      # Exactly what Subtitld's installer does: ZipFile.extractall (no
+      # symlinks, no permission bits), then chmod +x on the executable only.
+      - name: Install the archive like the host
+        shell: bash
+        run: |
+          python - "${{ runner.temp }}/installed" <<'PY'
+          import json, os, sys, zipfile
+          dest = sys.argv[1]
+          with zipfile.ZipFile(os.environ['ARCHIVE_NAME']) as zf:
+              zf.extractall(dest)
+              exe = os.path.join(dest, json.loads(zf.read('manifest.json'))['executable'])
+          os.chmod(exe, os.stat(exe).st_mode | 0o111)
+          print('installed', exe)
+          PY
+
+      - name: Prove the installed binary transcribes
+        shell: bash
+        env:
+          # Absolute: Popen resolves a relative executable against the current
+          # directory, not the cwd= it is handed.
+          WHISTLE_TEST_BINARY: ${{ runner.temp }}/installed/bin/whistle-addon${{ matrix.exe_suffix }}
+        run: |
+          set -euo pipefail
+          pytest -v -rs tests/test_installed.py --junitxml=frozen-report.xml
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse('frozen-report.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root)
+          skipped = sum(int(s.get('skipped', 0)) for s in suites)
+          if skipped:
+              sys.exit(f'FATAL: {skipped} installed-binary test(s) skipped')
+          PY
+
+      - name: Assert the archive is complete
+        shell: bash
+        env:
+          EXE_SUFFIX: ${{ matrix.exe_suffix }}
+          PLATFORM_LABEL: ${{ matrix.platform_label }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, runpy, sys, zipfile
+          name = os.environ['ARCHIVE_NAME']
+          suffix = os.environ['EXE_SUFFIX']
+          label = os.environ['PLATFORM_LABEL']
+          pins = runpy.run_path('tools/fetch_assets.py')
+          library = pins['PLATFORMS'][label]['library']
+          zf = zipfile.ZipFile(name)
+          names = set(zf.namelist())
+          manifest = json.loads(zf.read('manifest.json'))
+          repo_manifest = json.load(open('manifest.json', encoding='utf-8'))
+          problems = []
+          if manifest['version'] != repo_manifest['version']:
+              problems.append('manifest version mismatch')
+          if manifest['executable'] != f'bin/whistle-addon{suffix}':
+              problems.append(f"executable is {manifest['executable']!r}")
+          weights = 'bin/_internal/assets/whistle.cact'
+          engine = f'bin/_internal/assets/{library}'
+          required = ['manifest.json', 'LICENSE', 'README.md', manifest['executable'], weights, engine,
+                      'THIRD_PARTY_LICENSES/README.md',
+                      'THIRD_PARTY_LICENSES/cactus-needle/LICENSE',
+                      'THIRD_PARTY_LICENSES/whistle-weights/LICENSE',
+                      'THIRD_PARTY_LICENSES/python/LICENSE.txt',
+                      'THIRD_PARTY_LICENSES/pyinstaller/COPYING.txt']
+          problems += [f'missing {r}' for r in required if r not in names]
+          if weights in names and hashlib.sha256(zf.read(weights)).hexdigest() != pins['WEIGHTS_SHA256']:
+              problems.append('whistle.cact does not match its pinned sha256')
+          # PyInstaller re-signs Mach-O files, so only Linux and Windows keep
+          # the engine byte for byte.
+          if engine in names and not label.startswith('macos'):
+              with open(f'build/assets/{library}', 'rb') as f:
+                  if zf.read(engine) != f.read():
+                      problems.append(f'{library} differs from the verified engine')
+          if problems:
+              sys.exit('FATAL: ' + '; '.join(problems))
+          print(f'{name}: {len(names)} entries, all required files present')
+          PY
+
+      - name: Checksum
+        shell: bash
+        run: |
+          python -c "import hashlib,os;p=os.environ['ARCHIVE_NAME'];print(hashlib.sha256(open(p,'rb').read()).hexdigest())" > "${ARCHIVE_NAME}.sha256"
+          cat "${ARCHIVE_NAME}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform_label }}
+          path: |
+            ${{ env.ARCHIVE_NAME }}
+            ${{ env.ARCHIVE_NAME }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefacts
+      - name: Flatten
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "FATAL: tag ${GITHUB_REF_NAME} does not match manifest version ${version}"
+            exit 1
+          fi
+          mkdir -p release-files
+          find artefacts -type f -name 'whistle-*' -print -exec cp {} release-files/ \;
+          ls -lah release-files
+          # Every advertised platform must be present, each with its sidecar,
+          # or the catalog refuses the release.
+          for label in linux-x86_64 macos-arm64 windows-x86_64; do
+            test -f "release-files/whistle-${version}-${label}.zip"
+            test -f "release-files/whistle-${version}-${label}.zip.sha256"
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Offline speech-to-text for Subtitld with Cactus Compute's Whistle model, in
+            English, German, French, Spanish, Italian, Dutch and Polish.
+
+            The 16.9 MB model and the Needle engine are inside each archive, pinned by
+            sha256. Nothing downloads on first use, and the add-on sends nothing anywhere.
+
+            The add-on, the Whistle weights and the Needle engine are Apache-2.0. Each
+            archive carries `THIRD_PARTY_LICENSES/` with the licence of everything
+            frozen into it, indexed by file in its README.
+
+      # The catalog also rebuilds every six hours; this only makes it immediate.
+      - name: Trigger catalog rebuild
+        env:
+          GH_TOKEN: ${{ secrets.SUBTITLD_BOT_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::notice::SUBTITLD_BOT_TOKEN is not set; the catalog picks this release up on its next scheduled rebuild."
+            exit 0
+          fi
+          gh api repos/Subtitld/addons-catalog/dispatches -f event_type=catalog-rebuild

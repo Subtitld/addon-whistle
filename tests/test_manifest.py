@@ -28,6 +28,7 @@ MANIFEST = json.loads((REPO_ROOT / 'manifest.json').read_text(encoding='utf-8'))
 FIELDS = {f['key']: f for f in MANIFEST['config_schema']['fields']}
 SOURCE = (REPO_ROOT / 'whistle_addon' / '__main__.py').read_text(encoding='utf-8')
 PYPROJECT = (REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8')
+WORKFLOW = (REPO_ROOT / '.github' / 'workflows' / 'release.yml').read_text(encoding='utf-8')
 
 
 def _load_tool(name):
@@ -119,7 +120,42 @@ def test_no_module_of_the_add_on_loads_the_package_or_the_network():
         assert not banned.search(path.read_text(encoding='utf-8')), path.name
 
 
-def test_the_runtime_dependencies_are_numpy_only():
+def test_the_add_on_has_no_runtime_dependencies():
+    """Standard library and ffmpeg only: nothing here is a licence to track."""
     block = re.search(r'^dependencies = \[(.*?)\]', PYPROJECT, re.M | re.S).group(1)
-    assert re.findall(r'"([^"]+)"', block) == ['numpy>=1.24']
+    assert re.findall(r'"([^"]+)"', block) == []
 
+
+
+def test_the_release_builds_every_platform_the_manifest_declares():
+    built = re.findall(r'^\s+platform_label:\s*(\S+)\s*$', WORKFLOW, re.M)
+    assert built, 'no build matrix in release.yml'
+    assert {label.split('-')[0] for label in built} == set(MANIFEST['platforms'])
+    assert set(built) <= set(FETCH.PLATFORMS), 'a built platform has no pinned engine'
+    published = re.search(r'for label in ([^;]+); do', WORKFLOW).group(1).split()
+    assert sorted(published) == sorted(built), 'the release job checks other platforms than it builds'
+
+
+def test_the_release_names_archives_the_way_the_catalog_reads_them():
+    """The catalog parses `<id>-<version>-<platform>.zip` plus a `.sha256` sidecar."""
+    assert f'archive="{MANIFEST["id"]}-${{version}}-${{{{ matrix.platform_label }}}}.zip"' in WORKFLOW
+    assert '${ARCHIVE_NAME}.sha256' in WORKFLOW
+
+
+def test_the_release_proves_the_installed_binary_and_refuses_skips():
+    assert 'WHISTLE_TEST_BINARY' in WORKFLOW and 'tests/test_installed.py' in WORKFLOW
+    assert WORKFLOW.count('skipped') >= 2
+    assert 'tools/assemble_licences.py' in WORKFLOW
+    assert WORKFLOW.index('tools/fetch_assets.py --platform ${{ matrix.platform_label }}') < WORKFLOW.index('pyinstaller pyinstaller.spec')
+
+
+def test_every_licence_rule_names_a_notice_that_is_committed_or_harvested():
+    """Rules for libraries the spec excludes may point at notices not committed;
+    the tool then fails the build, which is the point. The rest must exist."""
+    tool = _load_tool('assemble_licences')
+    harvested = {'python/LICENSE.txt', 'pyinstaller/COPYING.txt'}
+    excluded = {'OpenSSL', 'bzip2', 'XZ Utils', 'zstd', 'mpdecimal'}
+    for _pattern, notice, component in tool.RULES:
+        if component in excluded or notice in harvested:
+            continue
+        assert (REPO_ROOT / 'THIRD_PARTY_LICENSES' / notice).is_file(), notice

@@ -38,7 +38,7 @@
       "default": true
     }
   ],
-  "disk_required_mb": 100,
+  "disk_required_mb": 60,
   "ram_required_mb": 512,
   "config_schema": {
     "fields": [
