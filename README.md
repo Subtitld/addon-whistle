@@ -51,7 +51,8 @@ The add-on calls the engine itself. It does not install or import the
 downloader that can fetch native code at runtime.
 
 Each release archive also carries CPython and the few native libraries its
-standard modules need (libffi, Expat, zlib), frozen by PyInstaller. Its
+standard modules need (such as libffi and zlib), frozen by PyInstaller. On
+Windows that includes the Microsoft C runtime Python ships with. Its
 `THIRD_PARTY_LICENSES/` folder is assembled at build time by
 `tools/assemble_licences.py`, with a README that names the notice for every
 native file in the archive. The build fails if any native file has none.
@@ -82,8 +83,15 @@ Linux x86_64, CPU, the frozen build:
 | 66 s clip (windowed by the engine) | 5.0 to 5.8 s | 80 MB |
 
 Word timings stayed monotonic across the 66 s run, with no gap longer than
-1.1 s between words. The Linux release archive is 20.5 MiB, or 28.6 MiB
-installed.
+1.1 s between words.
+
+Release 0.0.1, as built by the release workflow:
+
+| Platform | Download | Installed |
+|----------|----------|-----------|
+| Linux x86_64 | 29.3 MiB | 49.6 MiB |
+| macOS arm64 | 27.4 MiB | 31.7 MiB |
+| Windows x86_64 | 21.5 MiB | 29.9 MiB |
 
 ## Building
 
