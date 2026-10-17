@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "id": "whistle",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "display_name": "Whistle (offline)",
   "summary": "Offline speech-to-text with Cactus Compute's Whistle model: 16.9 MB, bundled, CPU only, word timestamps. Transcribes English, German, French, Spanish, Italian, Dutch and Polish.",
   "author": "Subtitld",

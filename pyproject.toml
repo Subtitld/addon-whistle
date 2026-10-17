@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subtitld-addon-whistle"
-version = "0.0.1"
+version = "0.0.2"
 description = "Subtitld add-on: offline speech-to-text with Whistle (Cactus Compute)"
 readme = "README.md"
 license = { text = "Apache-2.0" }
