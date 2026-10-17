@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "id": "whistle",
+  "version": "0.0.1",
+  "display_name": "Whistle (offline)",
+  "summary": "Offline speech-to-text with Cactus Compute's Whistle model: 16.9 MB, bundled, CPU only, word timestamps. Transcribes English, German, French, Spanish, Italian, Dutch and Polish.",
+  "author": "Subtitld",
+  "homepage": "https://github.com/Subtitld/addon-whistle",
+  "license": "Apache-2.0",
+  "executable": "bin/whistle-addon",
+  "protocol": 1,
+  "startup_timeout_sec": 30,
+  "platforms": [
+    "linux",
+    "macos",
+    "windows"
+  ],
+  "tasks": [
+    "asr.transcribe"
+  ],
+  "languages": [
+    "en",
+    "de",
+    "fr",
+    "es",
+    "it",
+    "nl",
+    "pl"
+  ],
+  "models": [
+    {
+      "id": "whistle",
+      "display_name": "Whistle",
+      "file": "whistle.cact",
+      "size_mb": 17,
+      "license": "Apache-2.0",
+      "bundled": true,
+      "default": true
+    }
+  ],
+  "disk_required_mb": 100,
+  "ram_required_mb": 512,
+  "config_schema": {
+    "fields": [
+      {
+        "key": "keywords",
+        "type": "string",
+        "label": "Keywords",
+        "default": "",
+        "help": "Names and jargon the audio uses, separated by commas. Whistle favours them when it is unsure of a word, so a name it would spell differently comes out right."
+      }
+    ]
+  }
+}

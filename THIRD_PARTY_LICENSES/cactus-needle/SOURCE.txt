@@ -1,0 +1,22 @@
+Component:   Needle native engine (libneedle3), as shipped by cactus-needle
+Version:     3.3.1 (the engine version cactus-needle 3.2.4 names for Needle 3)
+Licence:     Apache-2.0 (see LICENSE in this folder)
+Copyright:   Cactus Compute
+
+Where it comes from
+-------------------
+Hugging Face, repository Cactus-Compute/needle3, file python/<wheel> at main.
+The library is needle/libneedle3.<ext> inside the wheel. tools/fetch_assets.py
+checks each wheel against the sha256 below before it extracts the library.
+
+  linux-x86_64   cactus_needle-3.3.1-py3-none-manylinux2014_x86_64.whl
+                 3de03a183f56e28f8f1945fbbc5048efca0699a7f3ed0d66a244ca7e30442c22
+  macos-arm64    cactus_needle-3.3.1-py3-none-macosx_11_0_arm64.whl
+                 19534f411ad71312031d6df5418d0e55b8d16075c28a217aef4b921349bdfb4a
+  macos-x86_64   cactus_needle-3.3.1-py3-none-macosx_11_0_x86_64.whl
+                 e74ac1204ffe29d75db1215d889ad46c8add39e52042df22cd99c2e37855c273
+  windows-x86_64 cactus_needle-3.3.1-py3-none-win_amd64.whl
+                 4e50c5fa983c8737de200d9e96af937dd8135371ca557fe8c7c9eb1adba39f5a
+
+The Python wrapper that documents this ABI is cactus-needle 3.2.4 on PyPI
+(Apache-2.0). This add-on does not install or import it.

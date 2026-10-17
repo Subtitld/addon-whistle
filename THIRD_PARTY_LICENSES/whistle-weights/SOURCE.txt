@@ -1,0 +1,14 @@
+Component:   Whistle speech-to-text weights (whistle.cact)
+Size:        16,919,407 bytes
+sha256:      b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb
+Licence:     Apache-2.0 (see LICENSE in this folder, identical to the repository's)
+Copyright:   Cactus Compute
+
+Where it comes from
+-------------------
+Hugging Face, repository Cactus-Compute/whistle, at revision
+ca5287601bef25af26dcf2e1b2bdc0843a7c19e5. The file is bundled into the add-on
+archive; nothing is downloaded when the add-on runs.
+
+Languages it transcribes, per the model card: English, German, French, Spanish,
+Italian, Dutch and Polish.
