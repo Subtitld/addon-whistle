@@ -115,6 +115,11 @@ published. It then publishes the zips with their `.sha256` files and asks the
 add-ons catalog to rebuild. Without the `SUBTITLD_BOT_TOKEN` secret, the
 catalog picks the release up on its six-hourly rebuild instead.
 
+The release notes are the tag's message (`git tag -a`), or, for a plain tag,
+the body of the tagged commit's message. Write them for people who use the
+add-on: they show in the add-on's page on subtitld.org. A release with neither
+fails before it publishes.
+
 ## Tests
 
 ```bash

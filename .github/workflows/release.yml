@@ -297,21 +297,29 @@ jobs:
             test -f "release-files/whistle-${version}-${label}.zip"
             test -f "release-files/whistle-${version}-${label}.zip.sha256"
           done
+      # The notes are the tag's message when the tag is annotated, otherwise
+      # the tagged commit's message, without its subject line and trailers.
+      - name: Release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" = tag ]; then
+            git tag -l --format='%(contents:body)' "${GITHUB_REF_NAME}" > release-notes.md
+          else
+            git log -1 --format=%b "${GITHUB_SHA}" | sed -E '/^(Co-authored-by|Signed-off-by): /Id' > release-notes.md
+          fi
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "FATAL: the tag and its commit carry no release notes"
+            exit 1
+          fi
+          cat release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: release-files/*
           fail_on_unmatched_files: true
           generate_release_notes: true
-          body: |
-            Offline speech-to-text for Subtitld with Cactus Compute's Whistle model, in
-            English, German, French, Spanish, Italian, Dutch and Polish.
-
-            The 16.9 MB model and the Needle engine are inside each archive, pinned by
-            sha256. Nothing downloads on first use, and the add-on sends nothing anywhere.
-
-            The add-on, the Whistle weights and the Needle engine are Apache-2.0. Each
-            archive carries `THIRD_PARTY_LICENSES/` with the licence of everything
-            frozen into it, indexed by file in its README.
+          body_path: release-notes.md
 
       # The catalog also rebuilds every six hours; this only makes it immediate.
       - name: Trigger catalog rebuild
