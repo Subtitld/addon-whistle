@@ -28,8 +28,9 @@ lines. Whistle favours them when it is unsure of a word.
 
 Limits
 ------
-Batch only: one result per request. The engine call cannot be interrupted, so
-a cancel takes effect before decoding starts, or once the engine returns.
+Batch only: one result per request. The audio is transcribed in windows of
+about a minute (whistle_addon/windows.py), with progress after each. A cancel
+takes effect between windows.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from pathlib import Path
 from whistle_addon import ADDON_ID, PROTOCOL_VERSION, __version__
 from whistle_addon.engine import LANGUAGES, SAMPLE_RATE, Engine, EngineError
 from whistle_addon.phrases import words_to_segments
+from whistle_addon.windows import windows
 
 ADDON_VERSION = __version__
 MODEL_ID = 'whistle'
@@ -386,16 +388,38 @@ def _handle_transcribe(state: _Request, params: dict) -> None:
             segments: list[dict] = []
             detected = language or ''
         else:
-            # 2. Engine: 0.05 -> 0.20, then transcribe: 0.20 -> 1.00
+            # 2. Engine: 0.05 -> 0.20, then transcribe window by window: 0.20 -> 1.00
             engine = _load_engine(req_id)
             if state.cancel.is_set():
                 raise _Cancelled()
             _emit_progress(req_id, 0.2, 'Transcribing...')
             started = time.monotonic()
-            result = engine.transcribe(samples, language=language, keywords=keywords)
-            log.info('transcribe %s: %.1fs of audio in %.2fs', req_id, duration, time.monotonic() - started)
-            segments = words_to_segments(result.get('words') or [], duration, str(result.get('text') or ''))
-            detected = str(result.get('language') or language or '')
+            ranges = windows(samples)
+            words: list[dict] = []
+            detected = language or ''
+            for begin, end in ranges:
+                if end - begin < _MIN_SAMPLES:
+                    continue
+                result = engine.transcribe(samples[begin:end], language=detected or None,
+                                           keywords=keywords)
+                offset = begin / float(SAMPLE_RATE)
+                window_words = result.get('words') or []
+                text = str(result.get('text') or '').strip()
+                if window_words:
+                    words.extend({**w, 'start': float(w.get('start') or 0.0) + offset,
+                                  'end': float(w.get('end') or w.get('start') or 0.0) + offset}
+                                 for w in window_words)
+                elif text:
+                    words.append({'word': text, 'start': offset, 'end': end / float(SAMPLE_RATE)})
+                if not detected and (window_words or text):
+                    # The first window with speech names the language for the rest.
+                    detected = str(result.get('language') or '')
+                if state.cancel.is_set():
+                    raise _Cancelled()
+                _emit_progress(req_id, 0.2 + 0.8 * end / len(samples), 'Transcribing...')
+            log.info('transcribe %s: %.1fs of audio in %d windows, %.2fs', req_id, duration,
+                     len(ranges), time.monotonic() - started)
+            segments = words_to_segments(words, duration)
         if state.cancel.is_set():
             raise _Cancelled()
         outcome = ('result', {

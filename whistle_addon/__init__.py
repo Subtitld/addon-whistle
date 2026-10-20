@@ -8,6 +8,6 @@ The package exists so the entry point can run both from source
 (`bin/whistle-addon`).
 """
 
-__version__ = '0.0.2'
+__version__ = '26.10.1'
 ADDON_ID = 'whistle'
 PROTOCOL_VERSION = 1
