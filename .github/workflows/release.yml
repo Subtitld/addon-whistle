@@ -75,7 +75,7 @@ jobs:
             exe_suffix: ''
           # The catalog cannot tell Mac architectures apart: ship arm64, as the
           # other add-ons do.
-          - os: macos-14
+          - os: macos-15
             platform_label: macos-arm64
             exe_suffix: ''
           - os: windows-2022
